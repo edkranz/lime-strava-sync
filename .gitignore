@@ -1,0 +1,10 @@
+# Raw API dumps contain your JWT and personal ride data — never commit
+probe-output/
+# Secrets and local state
+strava-tokens.json
+seen-trips.json
+gpx/
+*.env
+.env
+__pycache__/
+.DS_Store
