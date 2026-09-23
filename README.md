@@ -152,6 +152,7 @@ Pace comes out roughly constant. Good enough for Strava to draw the map and comp
 - Poll the returned upload id until it processes; on `status: "ready"` you get an `activity_id`.
 - Dedupe on the Lime trip `id` (e.g. a KV store / local sqlite / JSON file). Also set the GPX `<time>` so Strava's own duplicate detection helps.
 - `sport_type` and `hide_from_home` aren't accepted by the uploads endpoint — set them with a `PUT /activities/{id}` once the upload has processed.
+- **Feed visibility:** by default a ride finished within `RECENT_FEED_HOURS` (48 h) posts to your followers' feed; older rides are set `hide_from_home` so a backfill stays quiet. Override with `--no-hide` (always post) or `--hide` (always hide).
 - **Strava's public API cannot delete activities** (`DELETE` returns 401). Below-threshold junk that predates the filter must be removed from the Strava website/app; the threshold just stops new junk being uploaded.
 
 ### Trivial-trip threshold

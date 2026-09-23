@@ -64,6 +64,10 @@ REPO_URL = os.environ.get("REPO_URL", "https://github.com/edkranz/lime-strava-sy
 MIN_DISTANCE_M = 50
 MIN_DURATION_S = 30
 
+# Rides finished within this many hours post to the feed; older ones are hidden
+# (so a backfill doesn't spam followers, but genuinely recent rides still show).
+RECENT_FEED_HOURS = 48
+
 LIME_HEADERS = {
     "User-Agent": "Lime/3.149.0 (iPhone; iOS 17.5; Scale/3.00)",
     "Accept": "application/json",
@@ -451,13 +455,23 @@ def cmd_gpx(args):
               f"{trip['duration_s']//60}m -> {path}")
 
 
+def should_hide(trip, args):
+    """Hide from the feed unless the ride is recent. --hide/--no-hide force it."""
+    if args.no_hide:
+        return False
+    if args.hide:
+        return True
+    end = datetime.fromisoformat(trip["completed_at"].replace("Z", "+00:00"))
+    age_h = (datetime.now(timezone.utc) - end).total_seconds() / 3600
+    return age_h > RECENT_FEED_HOURS
+
+
 def cmd_upload(args):
     token = lime_token()
     seen = load_seen()
-    # Backfill (--all) hides rides from followers' feeds by default so a bulk
-    # import doesn't spam them; a single latest-ride upload posts normally.
-    # --no-hide forces feed posting; --hide forces hiding even for a single ride.
-    hide = (args.all or args.hide) and not args.no_hide
+    # By default, rides finished within RECENT_FEED_HOURS post to the feed and
+    # older ones are hidden (so a backfill stays quiet but recent rides show).
+    # --no-hide forces every ride to the feed; --hide hides every ride.
     ids = pick_trip_ids(args, token)
     for i, tid in enumerate(ids):
         if tid in seen and not args.force:
@@ -469,6 +483,7 @@ def cmd_upload(args):
         except (ValueError, KeyError) as e:
             print(f"skip {tid[:16]}… {e}")
             continue
+        hide = should_hide(trip, args)
         feed = "hidden from feed" if hide else "posted to feed"
         print(f"uploading {name} ({trip['distance_m']/1000:.2f} km, {len(pts)} pts, {feed})…")
         aid, err = strava_upload(gpx, name, trip_description(trip), tid,
@@ -503,9 +518,10 @@ def main():
     u.add_argument("--sport-type", default="EBikeRide",
                    help="Strava sport_type (default EBikeRide; e.g. Ride)")
     u.add_argument("--hide", action="store_true",
-                   help="hide from followers' feeds (auto-on for --all backfill)")
+                   help=f"hide every ride from the feed (default: hide only rides "
+                        f"older than {RECENT_FEED_HOURS}h)")
     u.add_argument("--no-hide", action="store_true",
-                   help="post to feed even during an --all backfill")
+                   help="post every ride to the feed, regardless of age")
     u.set_defaults(func=cmd_upload)
 
     args = p.parse_args()
