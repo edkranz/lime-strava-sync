@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lime-strava-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+
+  // Runs the unattended sync. Every 30 minutes (also keeps the Lime session warm):
+  "triggers": { "crons": ["*/30 * * * *"] },
+
+  // KV holds: lime_token, strava_tokens, seen:<tripId>, last_run.
+  // Create with `wrangler kv namespace create LIME_SYNC` and paste the id here.
+  "kv_namespaces": [{ "binding": "LIME_SYNC", "id": "60c5532df9f7471a84cd19cba8dd3045" }],
+
+  "vars": {
+    "ENVIRONMENT": "production",
+    "STRAVA_CLIENT_ID": "281409",
+    "MIN_DISTANCE_M": "50",
+    "MIN_DURATION_S": "30",
+    "SPORT_TYPE": "EBikeRide",
+    "REPO_URL": "https://github.com/edkranz/lime-strava-sync",
+    "HIDE_FROM_HOME": "false",
+    "MAX_PAGES": "3"
+  }
+
+  // Secrets (set with `wrangler secret put`): STRAVA_CLIENT_SECRET, TRIGGER_KEY
+
+  // --- Email alerts via Resend (free tier — no paid Workers plan needed) ---
+  // 1. Create a free account at https://resend.com and copy an API key.
+  // 2. Set these secrets (kept out of git):
+  //      wrangler secret put RESEND_API_KEY
+  //      wrangler secret put ALERT_TO     # recipient (your Resend signup email)
+  //      wrangler secret put ALERT_FROM   # e.g. onboarding@resend.dev (test sender)
+  // Alerts fire only on a dead Lime token or a real error (transient CF
+  // 403 / 429 blocks are suppressed), deduped to once per ALERT_MIN_INTERVAL_H.
+}

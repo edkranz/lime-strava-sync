@@ -8,8 +8,10 @@ Subcommands:
     strava-auth  One-time Strava OAuth helper -> saves strava-tokens.json.
     upload       Build GPX for a trip and upload it to Strava.
 
-Reads the Lime bearer token from probe-output/01-login.json (or $LIME_TOKEN).
-Nothing is written to Lime. Strava uploads happen ONLY under `upload`.
+Uses a stored Lime token (probe-output/01-login.json or $LIME_TOKEN) and, if it's
+missing or expired, does an SMS login itself (prompts for phone + code). Set
+$LIME_PHONE (or in .env) to skip the phone prompt. Strava uploads happen ONLY
+under `upload`.
 
 Examples:
     python3 sync.py gpx                       # latest ride -> ./gpx/<id>.gpx
@@ -35,6 +37,22 @@ OUT = ROOT / "probe-output"
 GPX_DIR = ROOT / "gpx"
 SEEN_FILE = ROOT / "seen-trips.json"          # gitignored
 STRAVA_TOKENS = ROOT / "strava-tokens.json"   # gitignored
+ENV_FILE = ROOT / ".env"                       # gitignored
+
+
+def load_dotenv(path=ENV_FILE):
+    """Minimal .env loader (stdlib only). Real environment variables win over .env."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+load_dotenv()
 
 LIME_BASE = "https://web-production.lime.bike"
 STRAVA_BASE = "https://www.strava.com"
@@ -108,23 +126,72 @@ def _encode_multipart(fields, boundary):
 
 
 # ─────────────────────────────── Lime side ──────────────────────────────────
-def lime_token():
+_active_token = None  # the token in use this run; refreshed on login
+
+
+def _stored_token():
+    """A previously-saved token, from $LIME_TOKEN or probe-output/01-login.json."""
     tok = os.environ.get("LIME_TOKEN")
     if tok:
         return tok
     try:
         return json.load(open(OUT / "01-login.json"))["token"]
-    except (FileNotFoundError, KeyError):
-        sys.exit(
-            "No Lime token. Run `python3 probe.py` to log in, or set $LIME_TOKEN."
-        )
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        return None
 
 
-def lime_get(path, token):
+def lime_login():
+    """Interactive SMS login. Saves the response to probe-output/01-login.json.
+
+    Heads up: Lime allows one session per account, so logging in here logs the
+    Lime *app* out — you'll re-login the app next time you ride.
+    """
+    global _active_token
+    phone = os.environ.get("LIME_PHONE") or input(
+        "Lime phone (+international, e.g. +61412345678): "
+    ).strip()
+    if not phone.startswith("+"):
+        sys.exit("Phone must start with + and a country code.")
+    print("Requesting SMS code from Lime...")
+    http("GET", LIME_BASE + "/api/rider/v1/login?"
+         + urllib.parse.urlencode({"phone": phone}), headers=LIME_HEADERS)
+    code = input("Enter the code Lime just texted you: ").strip()
+    status, data = http("POST", LIME_BASE + "/api/rider/v1/login",
+                        headers=LIME_HEADERS, body={"login_code": code, "phone": phone})
+    token = data.get("token") if isinstance(data, dict) else None
+    if not token:
+        sys.exit(f"Lime login failed (HTTP {status}): {str(data)[:200]}")
+    OUT.mkdir(exist_ok=True)
+    json.dump(data, open(OUT / "01-login.json", "w"))
+    _active_token = token
+    print("Logged in to Lime ✅  (this logs the Lime app out — one session per account)")
+    return token
+
+
+def lime_token():
+    """Return a working Lime token, doing an SMS login if none is stored or it's dead."""
+    global _active_token
+    _active_token = _stored_token()
+    if _active_token:
+        status, _ = http("GET", LIME_BASE + "/api/rider/v1/views/user_transactions",
+                         headers={**LIME_HEADERS, "Authorization": f"Bearer {_active_token}"})
+        if status == 200:
+            return _active_token
+        print("Stored Lime token is missing or expired — logging in.")
+    else:
+        print("No Lime token found — logging in.")
+    return lime_login()
+
+
+def lime_get(path, token=None):
+    tok = _active_token or token
     status, data = http("GET", LIME_BASE + path,
-                        headers={**LIME_HEADERS, "Authorization": f"Bearer {token}"})
+                        headers={**LIME_HEADERS, "Authorization": f"Bearer {tok}"})
     if status == 401:
-        sys.exit("Lime token expired (HTTP 401). Re-run `python3 probe.py` to refresh.")
+        print("Lime token rejected mid-run — logging in again.")
+        tok = lime_login()
+        status, data = http("GET", LIME_BASE + path,
+                            headers={**LIME_HEADERS, "Authorization": f"Bearer {tok}"})
     if status != 200:
         sys.exit(f"Lime GET {path} -> HTTP {status}: {str(data)[:300]}")
     return data

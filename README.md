@@ -2,11 +2,13 @@
 
 Sync your [Lime](https://www.li.me/) bike/scooter rides to [Strava](https://www.strava.com/) as GPS activities — with the actual route drawn on the map.
 
-Lime has no public API, but the mobile app's private **rider API** exposes everything needed: an encoded route polyline, distance, duration, and timestamps for every completed trip. This repo documents that API (reverse-engineered from the app) and specs a sync tool built on top of it.
+Lime has no public API, but the mobile app's private **rider API** exposes everything needed: an encoded route polyline, distance, duration, and timestamps for every completed trip. This repo documents that API (reverse-engineered from the app) and provides a working sync tool built on top of it.
 
-> **Status:** API reverse-engineered and verified against a live account (Sydney, app v3.149). Sync implementation TODO. See [Sync design](#sync-design).
+> **Status:** Working, as a **manual / on-demand** tool (`sync.py`). Verified end-to-end against a live account (Sydney, app v3.149): login → history → route polyline → GPX → Strava activity with map.
 >
-> **Legal:** This uses Lime's private endpoints, which almost certainly violates their Terms of Service. Use only against **your own account**, poll infrequently, and don't redistribute captured tokens. No affiliation with Lime or Strava.
+> **It cannot run unattended.** Lime allows **only one active session per account** (see [Why it's manual](#why-its-manual-one-session-per-account)), so a background sync and the phone app can't both be logged in. This is a hard limit of Lime's design, not a TODO.
+>
+> **Legal:** This uses Lime's private endpoints, which almost certainly violates their Terms of Service. Use only against **your own account**, infrequently, and don't redistribute captured tokens. No affiliation with Lime or Strava.
 
 ---
 
@@ -43,9 +45,9 @@ The POST returns the bearer token plus a full user profile:
 }
 ```
 
-Email magic-link login also exists (`POST /api/rider/v2/onboarding/magic-link` → `.../onboarding/login`) but SMS is simpler to automate.
+Email magic-link login also exists (`POST /api/rider/v2/onboarding/magic-link` → `.../onboarding/login`, with an `X-Device-Token`) but SMS is simpler.
 
-> **Token lifetime is the main operational risk** and is not yet measured — see [Open questions](#open-questions).
+The JWT payload carries `expires_at = iat + 120s`, but **that claim is not enforced** — tokens keep working for hours. What actually ends a session is a *new login on the account* (see below), not the clock.
 
 ### 2. Trip history — `user_transactions`
 
@@ -156,34 +158,71 @@ Pace comes out roughly constant. Good enough for Strava to draw the map and comp
 
 Unlock-then-relock attempts show up as ~0 m / few-second trips. `sync.py` skips any trip under `MIN_DISTANCE_M` (50 m) **or** `MIN_DURATION_S` (30 s). `reconcile.py plan` lists already-uploaded activities that fall under the current threshold so they can be pruned by hand.
 
-### Deployment options
+---
 
-- **Cloudflare Worker + Cron Trigger** (every few hours) with KV for the seen-store — cheap, unattended.
-- Or a local cron / GitHub Action.
+## Why it's manual (one session per account)
 
-The blocker for full unattended operation is **token lifetime**: if the Lime JWT is short-lived and refresh requires a fresh SMS code, a human is needed periodically. Measure this before committing to a schedule (below).
+Lime enforces **one active session per account**. A new login anywhere — the phone app *or* this tool — invalidates the previous token. This was confirmed directly: log the tool in (token works ✅), then log back into the app, and the tool's token immediately returns `401`. A stable `X-Device-Token` makes no difference; the limit is per-account, not per-device.
+
+That kills any always-on/automated design, because of a circular dependency: **you can't take a Lime ride without the app, and using the app invalidates the sync's token.** So a background job can never hold a usable session between rides.
+
+**The workflow that does work — on-demand batch sync:**
+
+1. Ride normally; the app stays logged in.
+2. When you want to sync, run `python3 sync.py upload --all`. It does the SMS login (which logs the app out), pulls **all new rides with full route/map**, uploads them, and dedupes via `seen-trips.json`.
+3. Re-login the app next time you ride.
+
+Cost: one app re-login per sync session. You keep the maps; it's just not hands-off.
+
+### Dead end: the Cloudflare Worker (`worker/`)
+
+`worker/` contains a full TypeScript port (cron + KV token store + Strava OAuth refresh + Resend email alerts). **It was deployed, worked twice, then abandoned** — kept here as a documented dead end. Two independent reasons it can't host this:
+
+1. **One session per account** (above) — fatal on its own.
+2. Lime's API is behind **Cloudflare bot protection that intermittently 403-blocks Worker egress IPs** (`server: cloudflare` challenge page). The same token/headers work fine from a residential IP.
+
+If Lime ever dropped the one-session rule, the Worker would still be at the mercy of #2.
 
 ---
 
-## Reverse-engineering tools (in this repo)
+## Files in this repo
 
-These are the throwaway probes used to map the API. They read your own account only and write nothing to Lime/Strava.
+**The tool:**
 
 | Script | Purpose |
 |---|---|
-| `probe.py` | Interactive: SMS login → save token → fetch history → dump a trip's detail |
+| `sync.py` | The sync. `sync.py upload [--all]` = SMS login → pull rides → GPX → Strava. `sync.py gpx` builds GPX only (no upload). `sync.py strava-auth` does the one-time Strava OAuth. |
+| `reconcile.py` | Retitle already-uploaded activities to the current template; list below-threshold junk to prune. |
+
+**Reverse-engineering probes** (read-only; used to map the API):
+
+| Script | Purpose |
+|---|---|
+| `probe.py` | Interactive SMS login → save token → fetch history → dump a trip's detail |
 | `discover.py` | Reuse saved token, brute-probe candidate history endpoints |
 | `detail.py` | Find the trip-detail endpoint + scan for route/distance fields |
-| `reconcile.py` | Retitle already-uploaded activities to the current template; list below-threshold junk to prune |
+| `device_login.py` | The one-session experiment: log in as a distinct device, then check if the app kills the token |
 
-Raw responses land in `probe-output/` (**gitignored** — they contain your JWT and personal data).
+**`worker/`** — the abandoned Cloudflare Worker port (see [dead end](#dead-end-the-cloudflare-worker-worker)).
+
+Tokens and raw responses land in `probe-output/`, `seen-trips.json`, `strava-tokens.json` (**all gitignored** — they contain your JWT, Strava tokens, and personal data).
 
 ---
 
-## Open questions
+## Setup (one-time)
 
-- [ ] **Token lifetime** — how long does the login JWT stay valid? Is there a refresh endpoint, or does every renewal need a new SMS? *This decides whether the sync can run unattended.*
-- [ ] **Rate limits** — how aggressively can `user_transactions` / `trip_summary` be polled before Lime flags the account?
-- [ ] Does `next_cursor` reliably page all the way back through history for the initial backfill (48 trips on the test account)?
-- [ ] Do scooter trips (vs bikes) return the same `trip_summary` shape and a polyline?
+1. Create a personal Strava API app at [strava.com/settings/api](https://www.strava.com/settings/api) (callback domain `localhost`).
+2. `cp .env.example .env` and fill in `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` (`.env` is gitignored; `sync.py` loads it automatically). Real env vars still override `.env` if set.
+3. `python3 sync.py strava-auth` → authorize in browser, paste the code. Saves `strava-tokens.json`.
+
+Then, whenever you want to sync: `python3 sync.py upload --all`.
+
+---
+
+## Notes / findings
+
+- **Token lifetime:** the `expires_at` JWT claim (120 s) is not enforced; sessions really end on a competing login. See [Why it's manual](#why-its-manual-one-session-per-account).
+- **Rate limits:** bursts of requests from one IP trip Lime's Cloudflare bot protection (403). Space calls out; the on-demand tool's volume is fine.
+- **Backfill:** `next_cursor` pages reliably back through full history (52 trips on the test account).
+- **Scooter vs bike:** only bike trips verified so far; scooter `trip_summary` shape/polyline unconfirmed.
 ```
