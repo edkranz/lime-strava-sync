@@ -37,8 +37,8 @@ The POST returns the bearer token plus a full user profile:
 {
   "token": "<JWT, ~211 chars>",
   "user": {
-    "id": "NFZE6ULW3GKEM",
-    "attributes": { "num_trips": 48, "currency": "AUD", ... }
+    "id": "XXXXXXXXXXXXX",
+    "attributes": { "num_trips": 42, "currency": "AUD", ... }
   }
 }
 ```
@@ -69,12 +69,12 @@ Returns transactions grouped by month, plus a `next_cursor` for the next page:
           "date": "9/23/2026, 8:46 AM",
           "cost_amount": "AUD $2.75",
           "object_type": "Trip",              // filter on this
-          "id": "GIYDENRNGA4S2MRSKQ...="       // opaque base32 id → trip_summary
+          "id": "AAAAAAAAAAAAAAAAAAAA...="     // opaque base32 id → trip_summary
         }
       ]
     }
   ],
-  "next_cursor": "GIYDENRNGA3C2MJYKQ...="
+  "next_cursor": "BBBBBBBBBBBBBBBBBBBB...="
 }
 ```
 
@@ -92,7 +92,7 @@ Relevant fields under `data.attributes.trip.attributes`:
 
 | Field | Example | Notes |
 |---|---|---|
-| `polyline` | `"jlumEus\|y[?CAG..."` | **Encoded polyline** (Google algorithm, precision 5). The route. |
+| `polyline` | `"_p~iF~ps\|U_ulLn..."` | **Encoded polyline** (Google algorithm, precision 5). The route. |
 | `distance_meters` | `5014` | |
 | `duration_seconds` | `1147` | |
 | `started_at` | `2026-09-22T22:46:53.000Z` | ISO 8601 UTC |

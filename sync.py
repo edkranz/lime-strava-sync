@@ -39,6 +39,9 @@ STRAVA_TOKENS = ROOT / "strava-tokens.json"   # gitignored
 LIME_BASE = "https://web-production.lime.bike"
 STRAVA_BASE = "https://www.strava.com"
 
+# Shown at the end of every synced ride's Strava description. Override with $REPO_URL.
+REPO_URL = os.environ.get("REPO_URL", "https://github.com/edkranz/lime-strava-sync")
+
 LIME_HEADERS = {
     "User-Agent": "Lime/3.149.0 (iPhone; iOS 17.5; Scale/3.00)",
     "Accept": "application/json",
@@ -185,6 +188,16 @@ def decode_polyline(s):
     return pts
 
 
+def time_of_day(hour):
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 14:
+        return "midday"
+    if 14 <= hour < 18:
+        return "afternoon"
+    return "evening"
+
+
 def build_gpx(trip):
     pts = decode_polyline(trip["polyline"])
     if len(pts) < 2:
@@ -204,7 +217,7 @@ def build_gpx(trip):
         f'      <trkpt lat="{lat:.6f}" lon="{lng:.6f}"><time>{stamp(i)}</time></trkpt>'
         for i, (lat, lng) in enumerate(pts)
     )
-    name = f"Lime ride {start.astimezone().strftime('%Y-%m-%d %H:%M')}"
+    name = f"🍋‍🟩 {time_of_day(start.astimezone().hour)} Lime bike ride"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="lime-strava-sync" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata><time>{start.strftime('%Y-%m-%dT%H:%M:%SZ')}</time></metadata>
@@ -230,7 +243,8 @@ def trip_description(trip):
         bits.append(f"{trip['co2_g']}g CO2 saved")
     if trip["cost_cents"]:
         bits.append(f"{trip['currency']} ${trip['cost_cents']/100:.2f}")
-    return "Lime ride imported via lime-strava-sync — " + ", ".join(bits)
+    return ("🍋‍🟩 Lime ride imported via lime-strava-sync — " + ", ".join(bits)
+            + f"\npowered by {REPO_URL}")
 
 
 # ─────────────────────────────── Strava side ────────────────────────────────
@@ -295,7 +309,7 @@ def strava_access_token():
     return tok["access_token"]
 
 
-def strava_upload(gpx_text, name, description, trip_id, sport_type):
+def strava_upload(gpx_text, name, description, trip_id, sport_type, hide_from_home=False):
     access = strava_access_token()
     auth = {"Authorization": f"Bearer {access}"}
     status, data = http("POST", f"{STRAVA_BASE}/api/v3/uploads", headers=auth,
@@ -318,9 +332,11 @@ def strava_upload(gpx_text, name, description, trip_id, sport_type):
                 return None, f"Strava processing error: {d['error']}"
             if d.get("activity_id"):
                 aid = d["activity_id"]
-                # set sport_type (uploads endpoint can't)
-                http("PUT", f"{STRAVA_BASE}/api/v3/activities/{aid}",
-                     headers=auth, body={"sport_type": sport_type})
+                # uploads endpoint can't set these; patch the activity after processing.
+                # hide_from_home keeps backfilled rides off followers' feeds while
+                # still counting toward the profile and stats.
+                http("PUT", f"{STRAVA_BASE}/api/v3/activities/{aid}", headers=auth,
+                     body={"sport_type": sport_type, "hide_from_home": hide_from_home})
                 return aid, None
     return None, "timed out waiting for Strava to process the upload"
 
@@ -350,8 +366,12 @@ def cmd_gpx(args):
     token = lime_token()
     GPX_DIR.mkdir(exist_ok=True)
     for tid in pick_trip_ids(args, token):
-        trip = get_trip(token, tid)
-        gpx, name, pts = build_gpx(trip)
+        try:
+            trip = get_trip(token, tid)
+            gpx, name, pts = build_gpx(trip)
+        except (ValueError, KeyError) as e:
+            print(f"skip {tid[:16]}… {e}")
+            continue
         path = GPX_DIR / f"{tid[:20]}.gpx"
         path.write_text(gpx)
         print(f"{name}: {len(pts)} pts, {trip['distance_m']/1000:.2f} km, "
@@ -361,19 +381,33 @@ def cmd_gpx(args):
 def cmd_upload(args):
     token = lime_token()
     seen = load_seen()
-    for tid in pick_trip_ids(args, token):
+    # Backfill (--all) hides rides from followers' feeds by default so a bulk
+    # import doesn't spam them; a single latest-ride upload posts normally.
+    # --no-hide forces feed posting; --hide forces hiding even for a single ride.
+    hide = (args.all or args.hide) and not args.no_hide
+    ids = pick_trip_ids(args, token)
+    for i, tid in enumerate(ids):
         if tid in seen and not args.force:
             print(f"skip {tid[:16]}… already synced (use --force to re-upload)")
             continue
-        trip = get_trip(token, tid)
-        gpx, name, pts = build_gpx(trip)
-        print(f"uploading {name} ({trip['distance_m']/1000:.2f} km, {len(pts)} pts)…")
-        aid, err = strava_upload(gpx, name, trip_description(trip), tid, args.sport_type)
+        try:
+            trip = get_trip(token, tid)
+            gpx, name, pts = build_gpx(trip)
+        except (ValueError, KeyError) as e:
+            print(f"skip {tid[:16]}… {e}")
+            continue
+        feed = "hidden from feed" if hide else "posted to feed"
+        print(f"uploading {name} ({trip['distance_m']/1000:.2f} km, {len(pts)} pts, {feed})…")
+        aid, err = strava_upload(gpx, name, trip_description(trip), tid,
+                                 args.sport_type, hide_from_home=hide)
         if err:
             print(f"  FAILED: {err}")
             continue
         mark_seen(tid)
         print(f"  OK -> https://www.strava.com/activities/{aid}")
+        # be gentle on Lime/Strava during a multi-trip backfill
+        if len(ids) > 1 and i < len(ids) - 1:
+            time.sleep(1.5)
 
 
 def main():
@@ -395,6 +429,10 @@ def main():
     u.add_argument("--force", action="store_true", help="re-upload even if seen")
     u.add_argument("--sport-type", default="EBikeRide",
                    help="Strava sport_type (default EBikeRide; e.g. Ride)")
+    u.add_argument("--hide", action="store_true",
+                   help="hide from followers' feeds (auto-on for --all backfill)")
+    u.add_argument("--no-hide", action="store_true",
+                   help="post to feed even during an --all backfill")
     u.set_defaults(func=cmd_upload)
 
     args = p.parse_args()
