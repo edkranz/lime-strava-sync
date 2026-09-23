@@ -42,6 +42,10 @@ STRAVA_BASE = "https://www.strava.com"
 # Shown at the end of every synced ride's Strava description. Override with $REPO_URL.
 REPO_URL = os.environ.get("REPO_URL", "https://github.com/edkranz/lime-strava-sync")
 
+# Skip trivial trips (unlock-then-relock, aborted rides). Under either bound = skip.
+MIN_DISTANCE_M = 50
+MIN_DURATION_S = 30
+
 LIME_HEADERS = {
     "User-Agent": "Lime/3.149.0 (iPhone; iOS 17.5; Scale/3.00)",
     "Accept": "application/json",
@@ -151,6 +155,9 @@ def get_trip(token, trip_id):
     t = data["data"]["attributes"]["trip"]["attributes"]
     if not t.get("polyline"):
         raise ValueError(f"trip {trip_id} has no polyline (status={t.get('status')})")
+    dist, dur = t.get("distance_meters") or 0, t.get("duration_seconds") or 0
+    if dist < MIN_DISTANCE_M or dur < MIN_DURATION_S:
+        raise ValueError(f"below threshold ({dist} m, {dur} s)")
     return {
         "id": trip_id,
         "polyline": t["polyline"],
@@ -217,7 +224,7 @@ def build_gpx(trip):
         f'      <trkpt lat="{lat:.6f}" lon="{lng:.6f}"><time>{stamp(i)}</time></trkpt>'
         for i, (lat, lng) in enumerate(pts)
     )
-    name = f"🍋‍🟩 {time_of_day(start.astimezone().hour)} Lime bike ride"
+    name = f"{time_of_day(start.astimezone().hour).capitalize()} Lime bike ride 🍋‍🟩"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="lime-strava-sync" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata><time>{start.strftime('%Y-%m-%dT%H:%M:%SZ')}</time></metadata>
@@ -243,8 +250,7 @@ def trip_description(trip):
         bits.append(f"{trip['co2_g']}g CO2 saved")
     if trip["cost_cents"]:
         bits.append(f"{trip['currency']} ${trip['cost_cents']/100:.2f}")
-    return ("🍋‍🟩 Lime ride imported via lime-strava-sync — " + ", ".join(bits)
-            + f"\npowered by {REPO_URL}")
+    return ", ".join(bits) + f"\npowered by {REPO_URL}"
 
 
 # ─────────────────────────────── Strava side ────────────────────────────────

@@ -120,7 +120,8 @@ Lime login (SMS) ──> token ──┐
                              ▼
         for each new trip id (not in seen-store):
              GET trip_summary?transaction_id=id
-                             │
+                             │  skip if failed/no polyline, or below
+                             │  MIN_DISTANCE_M (50) / MIN_DURATION_S (30)
                              ▼
              decode polyline ─> synthesize timestamps ─> build GPX
                              │
@@ -148,6 +149,12 @@ Pace comes out roughly constant. Good enough for Strava to draw the map and comp
 - Strava has **no e-scooter/e-bike-share type** — pick `EBikeRide` (bikes) or `Ride`. Make it configurable.
 - Poll the returned upload id until it processes; on `status: "ready"` you get an `activity_id`.
 - Dedupe on the Lime trip `id` (e.g. a KV store / local sqlite / JSON file). Also set the GPX `<time>` so Strava's own duplicate detection helps.
+- `sport_type` and `hide_from_home` aren't accepted by the uploads endpoint — set them with a `PUT /activities/{id}` once the upload has processed.
+- **Strava's public API cannot delete activities** (`DELETE` returns 401). Below-threshold junk that predates the filter must be removed from the Strava website/app; the threshold just stops new junk being uploaded.
+
+### Trivial-trip threshold
+
+Unlock-then-relock attempts show up as ~0 m / few-second trips. `sync.py` skips any trip under `MIN_DISTANCE_M` (50 m) **or** `MIN_DURATION_S` (30 s). `reconcile.py plan` lists already-uploaded activities that fall under the current threshold so they can be pruned by hand.
 
 ### Deployment options
 
@@ -167,6 +174,7 @@ These are the throwaway probes used to map the API. They read your own account o
 | `probe.py` | Interactive: SMS login → save token → fetch history → dump a trip's detail |
 | `discover.py` | Reuse saved token, brute-probe candidate history endpoints |
 | `detail.py` | Find the trip-detail endpoint + scan for route/distance fields |
+| `reconcile.py` | Retitle already-uploaded activities to the current template; list below-threshold junk to prune |
 
 Raw responses land in `probe-output/` (**gitignored** — they contain your JWT and personal data).
 
