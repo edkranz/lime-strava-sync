@@ -90,7 +90,8 @@ export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncRes
   const minDurationS = num(env.MIN_DURATION_S, 30);
   const sportType = env.SPORT_TYPE || "EBikeRide";
   const repoUrl = env.REPO_URL || "https://github.com/edkranz/lime-strava-sync";
-  const hide = (env.HIDE_FROM_HOME || "false").toLowerCase() === "true";
+  // Rides finished within RECENT_FEED_HOURS post to the feed; older ones hide.
+  const recentFeedH = num(env.RECENT_FEED_HOURS, 48);
   const maxPages = opts.maxPages ?? num(env.MAX_PAGES, 3);
   const started = Date.now();
 
@@ -130,6 +131,8 @@ export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncRes
       }
 
       if (!access) access = await getAccessToken(env);
+      const ageH = (Date.now() - new Date(trip.completedAt).getTime()) / 3_600_000;
+      const hide = ageH > recentFeedH;
       const activityId = await uploadGpx(access, gpx, name, desc, tripId, sportType, hide);
       await env.LIME_SYNC.put(seenKey, "1");
       result.uploaded.push({ tripId, activityId, name });

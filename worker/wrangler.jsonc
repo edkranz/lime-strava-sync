@@ -5,12 +5,13 @@
   "compatibility_date": "2026-09-01",
   "observability": { "enabled": true },
 
-  // Runs the unattended sync. Every 30 minutes (also keeps the Lime session warm):
-  "triggers": { "crons": ["*/30 * * * *"] },
+  // Cron fires every 5 min; the handler only runs once a random 25-40 min has
+  // elapsed (jitter tracked in KV) — irregular, so it doesn't look like a bot.
+  "triggers": { "crons": ["*/5 * * * *"] },
 
-  // KV holds: lime_token, strava_tokens, seen:<tripId>, last_run.
+  // KV holds: lime_token, strava_tokens, seen:<tripId>, last_run, next_run_at.
   // Create with `wrangler kv namespace create LIME_SYNC` and paste the id here.
-  "kv_namespaces": [{ "binding": "LIME_SYNC", "id": "60c5532df9f7471a84cd19cba8dd3045" }],
+  "kv_namespaces": [{ "binding": "LIME_SYNC", "id": "faae38e4df81474a9cd95b5603aa15b8" }],
 
   "vars": {
     "ENVIRONMENT": "production",
@@ -19,8 +20,10 @@
     "MIN_DURATION_S": "30",
     "SPORT_TYPE": "EBikeRide",
     "REPO_URL": "https://github.com/edkranz/lime-strava-sync",
-    "HIDE_FROM_HOME": "false",
-    "MAX_PAGES": "3"
+    "RECENT_FEED_HOURS": "48",
+    "MAX_PAGES": "3",
+    "JITTER_MIN_MIN": "25",
+    "JITTER_MAX_MIN": "40"
   }
 
   // Secrets (set with `wrangler secret put`): STRAVA_CLIENT_SECRET, TRIGGER_KEY

@@ -11,8 +11,10 @@ export interface Env {
   MIN_DURATION_S?: string;
   SPORT_TYPE?: string;
   REPO_URL?: string;
-  HIDE_FROM_HOME?: string;
+  RECENT_FEED_HOURS?: string; // rides newer than this post to feed; older hide (default 48)
   MAX_PAGES?: string;
+  JITTER_MIN_MIN?: string; // min minutes between real runs (default 25)
+  JITTER_MAX_MIN?: string; // max minutes between real runs (default 40)
   // Email alerts via Resend (free tier). No-op until configured. See worker/README.md.
   RESEND_API_KEY?: string; // secret; from https://resend.com
   ALERT_TO?: string; // recipient (your Resend signup email works with the test sender)
@@ -20,11 +22,31 @@ export interface Env {
   ALERT_MIN_INTERVAL_H?: string; // dedupe window per condition (default 6h)
 }
 
+const numEnv = (v: string | undefined, dflt: number): number => {
+  const n = v ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : dflt;
+};
+
 export default {
-  // Cron trigger — the unattended sync.
+  // Cron fires every 5 min, but we only actually run once a random 25-40 min
+  // has elapsed (jitter, tracked in KV) — steady enough to catch new rides,
+  // irregular enough not to look like a metronome to Lime's bot protection.
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    console.log(`[CRON] ${controller.cron} @ ${new Date(controller.scheduledTime).toISOString()}`);
-    ctx.waitUntil(runSync(env).then(() => undefined));
+    ctx.waitUntil((async () => {
+      const now = Date.now();
+      const nextAt = Number((await env.LIME_SYNC.get("next_run_at")) || 0);
+      if (now < nextAt) {
+        console.log(`[CRON] skip — next run in ~${Math.round((nextAt - now) / 60000)} min`);
+        return;
+      }
+      const minM = numEnv(env.JITTER_MIN_MIN, 25);
+      const maxM = numEnv(env.JITTER_MAX_MIN, 40);
+      const jitterMs = (minM + Math.random() * (maxM - minM)) * 60000;
+      // Set the next window BEFORE running, so a failure doesn't cause hammering.
+      await env.LIME_SYNC.put("next_run_at", String(now + jitterMs));
+      console.log(`[CRON] running; next in ~${Math.round(jitterMs / 60000)} min`);
+      await runSync(env);
+    })());
   },
 
   // Manual trigger for testing + a status endpoint. Both require ?key=TRIGGER_KEY.
