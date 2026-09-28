@@ -55,6 +55,7 @@ export async function uploadGpx(
   tripId: string,
   sportType: string,
   hideFromHome: boolean,
+  visibility: string,
 ): Promise<number> {
   const auth = { Authorization: `Bearer ${access}` };
   const form = new FormData();
@@ -78,7 +79,11 @@ export async function uploadGpx(
       await fetch(`${API}/activities/${d.activity_id}`, {
         method: "PUT",
         headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ sport_type: sportType, hide_from_home: hideFromHome }),
+        body: JSON.stringify({
+          sport_type: sportType,
+          hide_from_home: hideFromHome,
+          visibility,
+        }),
       });
       return d.activity_id;
     }

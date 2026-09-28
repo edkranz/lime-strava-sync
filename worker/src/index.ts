@@ -1,36 +1,26 @@
 // Worker entry: cron (scheduled) + a protected manual trigger (fetch).
+// Behaviour is tuned via the KV "config" key (see config.ts) — dashboard-
+// editable with no redeploy. Only credentials/plumbing live in env below.
 import { runSync } from "./sync";
+import { getConfig } from "./config";
 
 export interface Env {
   LIME_SYNC: KVNamespace;
   STRAVA_CLIENT_ID: string;
-  STRAVA_CLIENT_SECRET: string;
-  TRIGGER_KEY: string;
+  STRAVA_CLIENT_SECRET: string; // secret
+  TRIGGER_KEY: string; // secret — protects /sync and /status
   ENVIRONMENT?: string;
-  MIN_DISTANCE_M?: string;
-  MIN_DURATION_S?: string;
-  SPORT_TYPE?: string;
-  REPO_URL?: string;
-  RECENT_FEED_HOURS?: string; // rides newer than this post to feed; older hide (default 48)
-  MAX_PAGES?: string;
-  JITTER_MIN_MIN?: string; // min minutes between real runs (default 25)
-  JITTER_MAX_MIN?: string; // max minutes between real runs (default 40)
   // Email alerts via Resend (free tier). No-op until configured. See worker/README.md.
   RESEND_API_KEY?: string; // secret; from https://resend.com
-  ALERT_TO?: string; // recipient (your Resend signup email works with the test sender)
-  ALERT_FROM?: string; // sender, e.g. onboarding@resend.dev, or you@verified-domain
+  ALERT_TO?: string; // secret — recipient
+  ALERT_FROM?: string; // secret — sender, e.g. onboarding@resend.dev
   ALERT_MIN_INTERVAL_H?: string; // dedupe window per condition (default 6h)
 }
 
-const numEnv = (v: string | undefined, dflt: number): number => {
-  const n = v ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : dflt;
-};
-
 export default {
-  // Cron fires every 5 min, but we only actually run once a random 25-40 min
-  // has elapsed (jitter, tracked in KV) — steady enough to catch new rides,
-  // irregular enough not to look like a metronome to Lime's bot protection.
+  // Cron fires every 5 min, but we only actually run once a random gap
+  // (config.pollMin..pollMax minutes, tracked in KV) has elapsed — steady
+  // enough to catch new rides, irregular enough not to look like a metronome.
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       const now = Date.now();
@@ -39,9 +29,9 @@ export default {
         console.log(`[CRON] skip — next run in ~${Math.round((nextAt - now) / 60000)} min`);
         return;
       }
-      const minM = numEnv(env.JITTER_MIN_MIN, 25);
-      const maxM = numEnv(env.JITTER_MAX_MIN, 40);
-      const jitterMs = (minM + Math.random() * (maxM - minM)) * 60000;
+      const cfg = await getConfig(env);
+      const span = Math.max(0, cfg.pollMaxMinutes - cfg.pollMinMinutes);
+      const jitterMs = (cfg.pollMinMinutes + Math.random() * span) * 60000;
       // Set the next window BEFORE running, so a failure doesn't cause hammering.
       await env.LIME_SYNC.put("next_run_at", String(now + jitterMs));
       console.log(`[CRON] running; next in ~${Math.round(jitterMs / 60000)} min`);

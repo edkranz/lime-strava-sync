@@ -55,24 +55,42 @@ function localHour(iso: string): number {
   return (d.getUTCHours() + TZ_OFFSET_HOURS) % 24;
 }
 
-export function activityName(trip: Trip): string {
-  const tod = timeOfDay(localHour(trip.startedAt));
-  const cap = tod.charAt(0).toUpperCase() + tod.slice(1);
-  return `${cap} Lime bike ride \u{1F34B}‍\u{1F7E9}`;
+// Individual stat strings (only those present), used by {stats} and the
+// per-field placeholders in the description template.
+function stats(trip: Trip) {
+  const distance = trip.distanceM ? `${(trip.distanceM / 1000).toFixed(2)} km` : "";
+  const duration = trip.durationS
+    ? `${Math.floor(trip.durationS / 60)}m${String(trip.durationS % 60).padStart(2, "0")}s`
+    : "";
+  const calories = trip.calories ? `${trip.calories} kcal` : "";
+  const co2 = trip.co2G ? `${trip.co2G}g CO2 saved` : "";
+  const cost = trip.costCents ? `${trip.currency} $${(trip.costCents / 100).toFixed(2)}` : "";
+  return { distance, duration, calories, co2, cost };
 }
 
-export function activityDescription(trip: Trip, repoUrl: string): string {
-  const bits: string[] = [];
-  if (trip.distanceM) bits.push(`${(trip.distanceM / 1000).toFixed(2)} km`);
-  if (trip.durationS) {
-    const m = Math.floor(trip.durationS / 60);
-    const s = String(trip.durationS % 60).padStart(2, "0");
-    bits.push(`${m}m${s}s`);
-  }
-  if (trip.calories) bits.push(`${trip.calories} kcal`);
-  if (trip.co2G) bits.push(`${trip.co2G}g CO2 saved`);
-  if (trip.costCents) bits.push(`${trip.currency} $${(trip.costCents / 100).toFixed(2)}`);
-  return bits.join(", ") + `\npowered by ${repoUrl}`;
+/** Fill a title template. Placeholders: {tod} {Tod} (morning/evening/…). */
+export function activityName(trip: Trip, template: string): string {
+  const tod = timeOfDay(localHour(trip.startedAt));
+  return template
+    .replaceAll("{tod}", tod)
+    .replaceAll("{Tod}", tod.charAt(0).toUpperCase() + tod.slice(1));
+}
+
+/**
+ * Fill a description template. Placeholders: {stats} (comma-joined present
+ * stats), {distance} {duration} {calories} {co2} {cost} {repo}.
+ */
+export function activityDescription(trip: Trip, template: string, repoUrl: string): string {
+  const s = stats(trip);
+  const joined = [s.distance, s.duration, s.calories, s.co2, s.cost].filter(Boolean).join(", ");
+  return template
+    .replaceAll("{stats}", joined)
+    .replaceAll("{distance}", s.distance)
+    .replaceAll("{duration}", s.duration)
+    .replaceAll("{calories}", s.calories)
+    .replaceAll("{co2}", s.co2)
+    .replaceAll("{cost}", s.cost)
+    .replaceAll("{repo}", repoUrl);
 }
 
 function isoZ(d: Date): string {
@@ -80,7 +98,7 @@ function isoZ(d: Date): string {
 }
 
 /** Build a GPX 1.1 track. Timestamps are synthesized evenly across the ride window. */
-export function buildGpx(trip: Trip): string {
+export function buildGpx(trip: Trip, name: string): string {
   const pts = decodePolyline(trip.polyline);
   if (pts.length < 2) throw new Error(`polyline too short (${pts.length} pts)`);
   const start = new Date(trip.startedAt);
@@ -99,7 +117,7 @@ export function buildGpx(trip: Trip): string {
 <gpx version="1.1" creator="lime-strava-sync" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata><time>${isoZ(start)}</time></metadata>
   <trk>
-    <name>${activityName(trip)}</name>
+    <name>${name}</name>
     <trkseg>
 ${trkpts}
     </trkseg>

@@ -1,0 +1,26 @@
+{
+  "_comment": "This is the shape of the KV 'config' key. Edit the live value in the Cloudflare dashboard (Storage & Databases -> KV -> LIME_SYNC -> config) to change behaviour with no redeploy. Any omitted key falls back to the defaults in src/config.ts.",
+
+  "pollMinMinutes": 25,
+  "pollMaxMinutes": 40,
+
+  "sportType": "EBikeRide",
+  "visibility": "everyone",
+  "feed": "hide",
+  "recentFeedHours": 48,
+
+  "minDistanceM": 50,
+  "minDurationS": 30,
+  "maxPages": 3,
+
+  "titleTemplate": "{Tod} Lime bike ride 🍋‍🟩",
+  "descriptionTemplate": "{stats}\npowered by {repo}",
+  "repoUrl": "https://github.com/edkranz/lime-strava-sync",
+
+  "_options": {
+    "feed": ["show", "hide", "recent (posts rides newer than recentFeedHours, hides older)"],
+    "visibility": ["everyone", "followers_only", "only_me"],
+    "titlePlaceholders": ["{tod} = morning/midday/afternoon/evening", "{Tod} = capitalised"],
+    "descriptionPlaceholders": ["{stats}", "{distance}", "{duration}", "{calories}", "{co2}", "{cost}", "{repo}"]
+  }
+}

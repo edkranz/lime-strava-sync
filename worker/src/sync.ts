@@ -3,6 +3,7 @@ import type { Env } from "./index";
 import { getLimeToken, listTripIds, getTrip, SkipTrip, LimeAuthError } from "./lime";
 import { getAccessToken, uploadGpx } from "./strava";
 import { buildGpx, activityName, activityDescription } from "./gpx";
+import { getConfig, shouldHide } from "./config";
 
 export interface SyncOptions {
   dry?: boolean; // build GPX but don't touch Strava
@@ -86,13 +87,8 @@ async function maybeAlert(env: Env, result: SyncResult): Promise<void> {
 
 export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncResult> {
   const result: SyncResult = { ok: false, uploaded: [], skipped: [], seenAlready: 0 };
-  const minDistanceM = num(env.MIN_DISTANCE_M, 50);
-  const minDurationS = num(env.MIN_DURATION_S, 30);
-  const sportType = env.SPORT_TYPE || "EBikeRide";
-  const repoUrl = env.REPO_URL || "https://github.com/edkranz/lime-strava-sync";
-  // Rides finished within RECENT_FEED_HOURS post to the feed; older ones hide.
-  const recentFeedH = num(env.RECENT_FEED_HOURS, 48);
-  const maxPages = opts.maxPages ?? num(env.MAX_PAGES, 3);
+  const cfg = await getConfig(env); // from KV — dashboard-editable, no redeploy
+  const maxPages = opts.maxPages ?? cfg.maxPages;
   const started = Date.now();
 
   try {
@@ -110,7 +106,7 @@ export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncRes
       }
       let trip;
       try {
-        trip = await getTrip(limeToken, tripId, minDistanceM, minDurationS);
+        trip = await getTrip(limeToken, tripId, cfg.minDistanceM, cfg.minDurationS);
       } catch (e) {
         if (e instanceof SkipTrip) {
           result.skipped.push({ tripId, reason: e.message });
@@ -120,9 +116,9 @@ export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncRes
         throw e;
       }
 
-      const gpx = buildGpx(trip);
-      const name = activityName(trip);
-      const desc = activityDescription(trip, repoUrl);
+      const name = activityName(trip, cfg.titleTemplate);
+      const desc = activityDescription(trip, cfg.descriptionTemplate, cfg.repoUrl);
+      const gpx = buildGpx(trip, name);
 
       if (opts.dry) {
         console.log(`[DRY] would upload ${tripId} "${name}" (${(trip.distanceM / 1000).toFixed(2)} km)`);
@@ -131,9 +127,10 @@ export async function runSync(env: Env, opts: SyncOptions = {}): Promise<SyncRes
       }
 
       if (!access) access = await getAccessToken(env);
-      const ageH = (Date.now() - new Date(trip.completedAt).getTime()) / 3_600_000;
-      const hide = ageH > recentFeedH;
-      const activityId = await uploadGpx(access, gpx, name, desc, tripId, sportType, hide);
+      const hide = shouldHide(cfg, trip.completedAt);
+      const activityId = await uploadGpx(
+        access, gpx, name, desc, tripId, cfg.sportType, hide, cfg.visibility,
+      );
       await env.LIME_SYNC.put(seenKey, "1");
       result.uploaded.push({ tripId, activityId, name });
       console.log(`[OK] ${tripId} -> https://www.strava.com/activities/${activityId}`);

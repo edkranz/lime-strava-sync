@@ -13,17 +13,12 @@
   // Create with `wrangler kv namespace create LIME_SYNC` and paste the id here.
   "kv_namespaces": [{ "binding": "LIME_SYNC", "id": "faae38e4df81474a9cd95b5603aa15b8" }],
 
+  // Behaviour (poll interval, feed policy, visibility, sport type, thresholds,
+  // title/description templates) lives in the KV "config" key — edit it in the
+  // dashboard with NO redeploy. See src/config.ts for keys + defaults.
   "vars": {
     "ENVIRONMENT": "production",
-    "STRAVA_CLIENT_ID": "281409",
-    "MIN_DISTANCE_M": "50",
-    "MIN_DURATION_S": "30",
-    "SPORT_TYPE": "EBikeRide",
-    "REPO_URL": "https://github.com/edkranz/lime-strava-sync",
-    "RECENT_FEED_HOURS": "48",
-    "MAX_PAGES": "3",
-    "JITTER_MIN_MIN": "25",
-    "JITTER_MAX_MIN": "40"
+    "STRAVA_CLIENT_ID": "281409"
   }
 
   // Secrets (set with `wrangler secret put`): STRAVA_CLIENT_SECRET, TRIGGER_KEY
